@@ -7,38 +7,52 @@ const data = fs.readFileSync('searches.txt', 'utf-8').trim();
 const searches = data.split('\n').map(line => line.trim());
 
 async function main() {
-    const browser = await chromium.launch({ headless: false });
+    const userDataDir = './browser-session';
 
-    const context = await browser.newContext({
+    const browser = await chromium.launchPersistentContext(userDataDir, {
+        headless: false,
+        viewport: { width: 1280, height: 800 },
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        viewport: { width: 1280, height: 800 }
+        args: ['--disable-blink-features=AutomationControlled']
     });
 
-    const page = await context.newPage();
+    const page = await browser.newPage();
     const allLinks = {};
 
+    await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+
+    const acceptBtn = page.locator('button:has-text("Accept all")');
+    if (await acceptBtn.isVisible().catch(() => false)) {
+        await acceptBtn.click();
+        await page.waitForTimeout(1000);
+    }
+
     for (const search of searches) {
-        console.log(`Searching: ${search}`);
+        console.log('\nSearching: ' + search);
 
-        await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded' });
-
-        const acceptBtn = page.locator('button:has-text("Accept all")');
-        if (await acceptBtn.isVisible().catch(() => false)) {
-            await acceptBtn.click();
-            await page.waitForTimeout(1000);
-        }
-
-        await page.fill('textarea[name="q"], input[name="q"]', search);
+        const searchBox = page.locator('textarea[name="q"]').first();
+        await searchBox.click({ clickCount: 3 });
+        await searchBox.fill('');
+        await page.waitForTimeout(500);
+        await searchBox.type(search, { delay: 80 });
+        await page.waitForTimeout(800);
         await page.keyboard.press('Enter');
-        await page.waitForLoadState('networkidle');
-        await page.waitForTimeout(2000);
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(3000);
 
         const links = await page.evaluate(() => {
             var found = [];
-            var allLinks = document.querySelectorAll('#search a');
-            for (var i = 0; i < allLinks.length; i++) {
-                var href = allLinks[i].href;
-                if (href && href.startsWith('http') && !href.includes('google') && !found.includes(href)) {
+            var allAnchors = document.querySelectorAll('#search a');
+            for (var i = 0; i < allAnchors.length; i++) {
+                var href = allAnchors[i].href;
+                if (
+                    href &&
+                    href.startsWith('http') &&
+                    !href.includes('google') &&
+                    !href.includes('#') &&
+                    !found.includes(href)
+                ) {
                     found.push(href);
                 }
                 if (found.length === 5) break;
@@ -47,38 +61,36 @@ async function main() {
         });
 
         allLinks[search] = links;
-        console.log(`Found ${links.length} links for: ${search}`);
+        console.log('Found ' + links.length + ' links for: ' + search);
         console.log(links);
 
-        await page.waitForTimeout(1500);
-    }
+        var cleanName = search.replace(/\s+/g, '');
 
-    for (const search of searches) {
-        const links = allLinks[search];
-        const cleanName = search.replace(/\s+/g, '');
-
-        for (let i = 0; i < links.length; i++) {
-            const url = links[i];
-            const filename = `screenshots/${cleanName}${i + 1}.png`;
-            console.log(`Taking screenshot: ${filename}`);
+        for (var i = 0; i < links.length; i++) {
+            var url = links[i];
+            var filename = 'screenshots/' + cleanName + (i + 1) + '.png';
+            console.log('Taking screenshot: ' + filename);
             try {
                 await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-                await page.waitForTimeout(1000);
-                await page.screenshot({ path: filename, fullPage: true });
-                console.log(`Saved: ${filename}`);
+                await page.waitForTimeout(1500);
+                await page.screenshot({ path: filename });
+                console.log('Saved: ' + filename);
             } catch (e) {
-                console.log(`Skipped (failed to load): ${url}`);
+                console.log('Skipped: ' + url);
             }
         }
+
+        await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(2000);
     }
 
     await browser.close();
-    console.log('Browser closed. Sending email...');
+    console.log('\nBrowser closed. Sending email...');
     await sendEmail(allLinks);
 }
 
 async function sendEmail(allLinks) {
-    const transporter = nodemailer.createTransport({
+    var transporter = nodemailer.createTransport({
         service: 'gmail',
         auth: {
             user: process.env.EMAIL_USER,
@@ -86,35 +98,37 @@ async function sendEmail(allLinks) {
         }
     });
 
-    let emailBody = `<h2>Playwright Automation - Task 2 Results</h2>`;
-    emailBody += `<p>Below are the top 5 search results for each query, along with screenshots attached.</p>`;
+    var emailBody = '<h2>Playwright Automation - Task 2 Results</h2>';
+    emailBody += '<p>Top 5 search results for each query with screenshots attached.</p>';
 
-    for (const search of searches) {
-        emailBody += `<h3>${search}</h3><ol>`;
-        for (const link of allLinks[search]) {
-            emailBody += `<li><a href="${link}">${link}</a></li>`;
+    for (var i = 0; i < searches.length; i++) {
+        var search = searches[i];
+        emailBody += '<h3>' + search + '</h3><ol>';
+        var links = allLinks[search];
+        for (var j = 0; j < links.length; j++) {
+            emailBody += '<li><a href="' + links[j] + '">' + links[j] + '</a></li>';
         }
-        emailBody += `</ol>`;
+        emailBody += '</ol>';
     }
 
-    const attachments = [];
-    for (const search of searches) {
-        const cleanName = search.replace(/\s+/g, '');
-        for (let i = 1; i <= 5; i++) {
-            const filename = `${cleanName}${i}.png`;
-            const filepath = `screenshots/${filename}`;
+    var attachments = [];
+    for (var i = 0; i < searches.length; i++) {
+        var cleanName = searches[i].replace(/\s+/g, '');
+        for (var j = 1; j <= 5; j++) {
+            var filename = cleanName + j + '.png';
+            var filepath = 'screenshots/' + filename;
             if (fs.existsSync(filepath)) {
-                attachments.push({ filename, path: filepath });
+                attachments.push({ filename: filename, path: filepath });
             }
         }
     }
 
-    const mailOptions = {
+    var mailOptions = {
         from: process.env.EMAIL_USER,
         to: process.env.EMAIL_TO,
         subject: 'Task 2 - Search Results and Screenshots',
         html: emailBody,
-        attachments
+        attachments: attachments
     };
 
     await transporter.sendMail(mailOptions);

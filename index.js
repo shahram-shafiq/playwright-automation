@@ -29,7 +29,7 @@ async function main() {
     }
 
     for (const search of searches) {
-        console.log(`Searching: ${search}`);
+        console.log('\nSearching: ' + search);
 
         const searchBox = page.locator('textarea[name="q"]').first();
         await searchBox.click({ clickCount: 3 });
@@ -61,14 +61,9 @@ async function main() {
         });
 
         allLinks[search] = links;
-        console.log(`Found ${links.length} links for: ${search}`);
+        console.log('Found ' + links.length + ' links for: ' + search);
         console.log(links);
 
-        await page.waitForTimeout(2000);
-    }
-
-    for (const search of searches) {
-        var links = allLinks[search];
         var cleanName = search.replace(/\s+/g, '');
 
         for (var i = 0; i < links.length; i++) {
@@ -78,16 +73,19 @@ async function main() {
             try {
                 await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
                 await page.waitForTimeout(1500);
-                await page.screenshot({ path: filename, fullPage: true });
+                await page.screenshot({ path: filename });
                 console.log('Saved: ' + filename);
             } catch (e) {
                 console.log('Skipped: ' + url);
             }
         }
+
+        await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(2000);
     }
 
     await browser.close();
-    console.log('Browser closed. Sending email...');
+    console.log('\nBrowser closed. Sending email...');
     await sendEmail(allLinks);
 }
 
